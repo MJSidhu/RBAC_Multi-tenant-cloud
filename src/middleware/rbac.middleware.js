@@ -1,5 +1,5 @@
 import Role from "../models/Role.js";
-import Permission from "../models/Permission.js";
+import Trust from "../models/Trust.js";
 
 export const authorize = (resource, action) => {
   return async (req, res, next) => {
@@ -10,20 +10,38 @@ export const authorize = (resource, action) => {
       if (!roles || roles.length === 0) {
         return res.status(403).json({ message: "Access denied (no roles)" });
       }
-
-      const rolesData = await Role.find({
+      
+      /* ---------- 1. SAME-TENANT CHECK ---------- */
+      const roleDocs = await Role.find({
         _id: { $in: roles },
         tenantId
       }).populate("permissions");
 
-      for (const role of rolesData) {
+      for (const role of roleDocs) {
         for (const perm of role.permissions) {
-          if (
-            perm.resource === resource &&
-            perm.action === action
-          ) {
-            return next();
+          if (perm.resource === resource && perm.action === action) {
+            return next(); // ✅ same-tenant access
           }
+        }
+      }
+
+      /* ---------- 2. CROSS-TENANT TRUST CHECK ---------- */
+      const trusts = await Trust.find({
+        targetTenantId: tenantId,
+        status: "active"
+      });
+
+      for (const trust of trusts) {
+        // role allowed?
+        const roleAllowed = roles.some(roleId =>
+          trust.allowedRoles.includes(roleId)
+        );
+
+        if (
+          roleAllowed &&
+          trust.allowedResources.includes(resource)
+        ) {
+          return next(); // ✅ trusted access
         }
       }
 
